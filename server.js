@@ -40,6 +40,22 @@ function getObra(db, obraId) {
   return db.obras.find((o) => o.id === obraId);
 }
 
+// Validação de entrada — corrige o problema encontrado no teste funcional: o backend aceitava
+// silenciosamente nomes de campo errados (ex.: "funcao" em vez de "especialidade") e gravava
+// registro vazio sem avisar. Agora toda rota de escrita crítica declara os campos que aceita;
+// obrigatório ausente OU campo desconhecido no corpo da requisição vira erro 400 explícito,
+// em vez de um registro incompleto salvo silenciosamente.
+function validarCampos(body, obrigatorios, aceitos) {
+  const erros = [];
+  const faltando = obrigatorios.filter((c) => body[c] === undefined || body[c] === null || body[c] === '');
+  if (faltando.length) erros.push(`Campo(s) obrigatório(s) ausente(s): ${faltando.join(', ')}.`);
+  const desconhecidos = Object.keys(body || {}).filter((k) => !aceitos.includes(k));
+  if (desconhecidos.length) {
+    erros.push(`Campo(s) não reconhecido(s): ${desconhecidos.join(', ')}. Campos aceitos por esta rota: ${aceitos.join(', ')}.`);
+  }
+  return erros;
+}
+
 // ---------- OBRAS ----------
 app.get('/api/obras', (req, res) => {
   const db = load();
@@ -47,8 +63,10 @@ app.get('/api/obras', (req, res) => {
 });
 
 app.post('/api/obras', (req, res) => {
+  const erros = validarCampos(req.body, ['nome'], ['nome', 'tipo']);
+  if (erros.length) return res.status(400).json({ erro: erros.join(' ') });
   const db = load();
-  const obra = { id: 'obra-' + uuid().slice(0, 8), nome: req.body.nome || 'Nova obra', tipo: req.body.tipo || '', criadaEm: new Date().toISOString() };
+  const obra = { id: 'obra-' + uuid().slice(0, 8), nome: req.body.nome, tipo: req.body.tipo || '', criadaEm: new Date().toISOString() };
   db.obras.push(obra);
   save(db);
   res.json(obra);
@@ -104,6 +122,7 @@ app.put('/api/obras/:obraId/cronograma/tarefas/:tarefaId', (req, res) => {
   if (!tarefa) return res.status(404).json({ erro: 'Tarefa não encontrada' });
   if (req.body.inicio) tarefa.inicio = req.body.inicio;
   if (req.body.termino) tarefa.termino = req.body.termino;
+  if (req.body.localizacao !== undefined) tarefa.localizacao = req.body.localizacao;
   tarefa.mudancaDeProjeto = !!req.body.mudancaDeProjeto;
 
   c.revisoes.push(novaRevisao);
@@ -127,6 +146,56 @@ app.put('/api/obras/:obraId/cronograma/tarefas/:tarefaId', (req, res) => {
   }
 
   res.json({ ok: true, revisao: novaRevisao });
+});
+
+// Planning Intelligence — Spatial & Sequence Coordination (capacidade restaurada do PRD
+// original, ver "Estrutura Consolidada do Produto"): não basta checar se os PROJETOS colidem —
+// duas ATIVIDADES incompatíveis programadas no mesmo local e período também são um problema.
+// Regras determinísticas simples primeiro (igual à filosofia de IA do Build Specification):
+// pares de palavras-chave que a experiência de obra já sabe que não deveriam coincidir.
+const REGRAS_SEQUENCIAMENTO = [
+  { par: ['pintura', 'vidro'], motivo: 'Pintura e instalação de vidro no mesmo ambiente geram retrabalho por poeira/respingo.' },
+  { par: ['pintura', 'esquadria'], motivo: 'Pintura e instalação de esquadrias no mesmo ambiente geram retrabalho.' },
+  { par: ['forro', 'inspeção'], motivo: 'Forro sendo fechado antes da inspeção das instalações impede a checagem.' },
+  { par: ['forro', 'instalaç'], motivo: 'Fechar o forro antes de concluir as instalações elétrica/hidráulica exige reabertura depois.' },
+  { par: ['piso', 'pesada'], motivo: 'Piso liberado antes do fim de atividade pesada corre risco de dano.' },
+  { par: ['piso', 'demoliç'], motivo: 'Piso acabado e demolição concorrente na mesma área geram dano ao acabamento.' },
+  { par: ['limpeza', 'demoliç'], motivo: 'Limpeza final e demolição na mesma área são incompatíveis.' }
+];
+
+function tarefasSeSobrepoem(a, b) {
+  if (!a.inicio || !a.termino || !b.inicio || !b.termino) return false;
+  return a.inicio <= b.termino && b.inicio <= a.termino;
+}
+
+app.get('/api/obras/:obraId/cronograma/sequenciamento', (req, res) => {
+  const db = load();
+  const c = db.cronogramas[req.params.obraId];
+  if (!c || c.revisoes.length === 0) return res.json([]);
+  const tarefas = c.revisoes[c.revisoes.length - 1].tarefas.filter((t) => t.localizacao && t.localizacao.trim());
+
+  const conflitos = [];
+  for (let i = 0; i < tarefas.length; i++) {
+    for (let j = i + 1; j < tarefas.length; j++) {
+      const t1 = tarefas[i], t2 = tarefas[j];
+      if (t1.localizacao.trim().toLowerCase() !== t2.localizacao.trim().toLowerCase()) continue;
+      if (!tarefasSeSobrepoem(t1, t2)) continue;
+
+      const n1 = t1.tarefa.toLowerCase(), n2 = t2.tarefa.toLowerCase();
+      const regra = REGRAS_SEQUENCIAMENTO.find(({ par }) =>
+        (n1.includes(par[0]) && n2.includes(par[1])) || (n1.includes(par[1]) && n2.includes(par[0]))
+      );
+      conflitos.push({
+        tarefaAId: t1.id, tarefaA: t1.tarefa, tarefaBId: t2.id, tarefaB: t2.tarefa,
+        localizacao: t1.localizacao, inicio: t1.inicio > t2.inicio ? t1.inicio : t2.inicio,
+        termino: t1.termino < t2.termino ? t1.termino : t2.termino,
+        severidade: regra ? 'alta' : 'média',
+        motivo: regra ? regra.motivo : 'Mesmo local e mesmo período — vale revisar mesmo sem regra específica.'
+      });
+    }
+  }
+  conflitos.sort((a, b) => (a.severidade === b.severidade ? 0 : a.severidade === 'alta' ? -1 : 1));
+  res.json(conflitos);
 });
 
 // ---------- COMPATIBILIZAÇÃO ----------
@@ -263,6 +332,18 @@ app.get('/api/obras/:obraId/incompatibilidades', (req, res) => {
   res.json(db.incompatibilidades[req.params.obraId] || []);
 });
 
+// Busca uma tarefa do cronograma atual da obra e devolve um retrato (snapshot) dela — usado
+// para vincular Incompatibilidade ↔ Atividade sem precisar de join ao vivo (Planning Intelligence:
+// "impacto de mudanças" — mostrar quando a atividade afetada começa).
+function snapshotAtividade(db, obraId, atividadeId) {
+  if (!atividadeId) return null;
+  const c = db.cronogramas[obraId];
+  if (!c || c.revisoes.length === 0) return null;
+  const t = c.revisoes[c.revisoes.length - 1].tarefas.find((x) => x.id === atividadeId);
+  if (!t) return null;
+  return { id: t.id, tarefa: t.tarefa, inicio: t.inicio, termino: t.termino, localizacao: t.localizacao || '' };
+}
+
 app.post('/api/obras/:obraId/incompatibilidades', (req, res) => {
   const db = load();
   const { obraId } = req.params;
@@ -275,11 +356,14 @@ app.post('/api/obras/:obraId/incompatibilidades', (req, res) => {
     severidade: req.body.severidade || 'média',
     responsavel: req.body.responsavel || '',
     prazo: req.body.prazo || '',
-    tipo: req.body.tipo || 'documentos', // 'documentos' ou 'fisica' (sequenciamento de ofícios)
+    tipo: req.body.tipo || 'documentos', // 'documentos', 'fisica' (sequenciamento de ofícios) ou 'sequenciamento' (Planning Intelligence)
     // origem: 'manual' | 'auto' — Épico 3 (Detecção assistida): 'auto' quando nasceu de uma
     // sugestão de sobreposição confirmada pelo engenheiro (regra: IA nunca grava sem confirmação humana).
     origem: req.body.origem === 'auto' ? 'auto' : 'manual',
     confianca: req.body.confianca != null ? Number(req.body.confianca) : null,
+    // Planning Intelligence — Pilar 3: vínculo com uma atividade do cronograma (Change → Impact).
+    atividadeId: req.body.atividadeId || null,
+    atividade: snapshotAtividade(db, obraId, req.body.atividadeId),
     status: 'aberto',
     criadaEm: new Date().toISOString()
   };
@@ -290,10 +374,15 @@ app.post('/api/obras/:obraId/incompatibilidades', (req, res) => {
 
 app.put('/api/obras/:obraId/incompatibilidades/:id', (req, res) => {
   const db = load();
-  const lista = db.incompatibilidades[req.params.obraId] || [];
+  const { obraId } = req.params;
+  const lista = db.incompatibilidades[obraId] || [];
   const item = lista.find((i) => i.id === req.params.id);
   if (!item) return res.status(404).json({ erro: 'Não encontrada' });
   Object.assign(item, req.body, { atualizadaEm: new Date().toISOString() });
+  if (req.body.atividadeId !== undefined) {
+    item.atividadeId = req.body.atividadeId || null;
+    item.atividade = snapshotAtividade(db, obraId, req.body.atividadeId);
+  }
   save(db);
   res.json(item);
 });
@@ -519,8 +608,11 @@ app.get('/api/obras/:obraId/efetivo-diario', (req, res) => {
 });
 
 app.post('/api/obras/:obraId/efetivo-diario', (req, res) => {
+  const erros = validarCampos(req.body, ['especialidade', 'data', 'quantidade'], ['especialidade', 'data', 'quantidade']);
+  if (erros.length) return res.status(400).json({ erro: erros.join(' ') });
   const db = load();
   const { obraId } = req.params;
+  if (!getObra(db, obraId)) return res.status(404).json({ erro: 'Obra não encontrada' });
   const item = {
     id: 'ef-' + uuid().slice(0, 8),
     especialidade: (req.body.especialidade || '').toLowerCase().trim(),
@@ -531,6 +623,153 @@ app.post('/api/obras/:obraId/efetivo-diario', (req, res) => {
   db.efetivoDiario[obraId].push(item);
   save(db);
   res.json(item);
+});
+
+// ---------- COMPRAS (Cost & Procurement Intelligence — Pilar 5) ----------
+// "Compras afetadas por mudança" (capacidade restaurada da Estrutura Consolidada do Produto):
+// um pedido de compra não deveria ser confirmado/emitido enquanto houver uma incompatibilidade
+// ABERTA que toque a mesma disciplina/especialidade — o risco é calculado a cada leitura,
+// nunca gravado como decisão automática (mesma regra de "IA nunca decide sozinha").
+function calcularRiscoPedido(db, obraId, pedido) {
+  if (pedido.status === 'recebido') return { emRisco: false, motivo: null, incompatibilidadeId: null };
+  const incs = (db.incompatibilidades[obraId] || []).filter((i) => i.status !== 'fechado');
+  const disciplina = (pedido.disciplina || '').toLowerCase().trim();
+  const especialidade = (pedido.especialidade || '').toLowerCase().trim();
+  const match = incs.find((i) => {
+    const discMatch = disciplina && (i.disciplinas || []).some((d) => {
+      const dl = d.toLowerCase();
+      return dl.includes(disciplina) || disciplina.includes(dl);
+    });
+    const textoMatch = especialidade && (
+      (i.titulo || '').toLowerCase().includes(especialidade) || (i.descricao || '').toLowerCase().includes(especialidade)
+    );
+    return discMatch || textoMatch;
+  });
+  if (!match) return { emRisco: false, motivo: null, incompatibilidadeId: null };
+  return {
+    emRisco: true,
+    motivo: `Incompatibilidade aberta "${match.titulo}" (${match.severidade}) pode alterar o escopo antes da compra ser confirmada.`,
+    incompatibilidadeId: match.id
+  };
+}
+
+app.get('/api/obras/:obraId/pedidos-compra', (req, res) => {
+  const db = load();
+  const itens = db.pedidosCompra[req.params.obraId] || [];
+  res.json(itens.map((p) => ({ ...p, ...calcularRiscoPedido(db, req.params.obraId, p) })));
+});
+
+app.post('/api/obras/:obraId/pedidos-compra', (req, res) => {
+  const erros = validarCampos(
+    req.body,
+    ['item'],
+    ['item', 'disciplina', 'especialidade', 'valorEstimado', 'fornecedor', 'status']
+  );
+  if (erros.length) return res.status(400).json({ erro: erros.join(' ') });
+  const db = load();
+  const { obraId } = req.params;
+  if (!getObra(db, obraId)) return res.status(404).json({ erro: 'Obra não encontrada' });
+  const item = {
+    id: 'pc-' + uuid().slice(0, 8),
+    item: req.body.item || '',
+    disciplina: req.body.disciplina || '',
+    especialidade: req.body.especialidade || '',
+    valorEstimado: Number(req.body.valorEstimado) || 0,
+    fornecedor: req.body.fornecedor || '',
+    status: req.body.status || 'planejado', // planejado -> emitido -> recebido
+    criadoEm: new Date().toISOString()
+  };
+  if (!db.pedidosCompra[obraId]) db.pedidosCompra[obraId] = [];
+  db.pedidosCompra[obraId].push(item);
+  save(db);
+  res.json({ ...item, ...calcularRiscoPedido(db, obraId, item) });
+});
+
+app.put('/api/obras/:obraId/pedidos-compra/:id', (req, res) => {
+  const db = load();
+  const { obraId } = req.params;
+  const lista = db.pedidosCompra[obraId] || [];
+  const item = lista.find((p) => p.id === req.params.id);
+  if (!item) return res.status(404).json({ erro: 'Pedido não encontrado' });
+  if (req.body.status) item.status = req.body.status;
+  item.atualizadoEm = new Date().toISOString();
+  save(db);
+  res.json({ ...item, ...calcularRiscoPedido(db, obraId, item) });
+});
+
+// ---------- RDO — Diário de obra (Construction Intelligence — Pilar 6) ----------
+// Registro do que realmente aconteceu, ligado a uma atividade do cronograma. Diferente das
+// outras detecções automáticas, aqui não há "confirmar/rejeitar sugestão": o RDO É o dado
+// primário (é o engenheiro relatando o real), então grava direto e já atualiza o %
+// concluído da tarefa vinculada no cronograma — planejado x real deixa de ser manual.
+app.get('/api/obras/:obraId/rdos', (req, res) => {
+  const db = load();
+  const itens = (db.rdos[req.params.obraId] || []).slice().sort((a, b) => (a.data < b.data ? 1 : -1));
+  res.json(itens);
+});
+
+app.post('/api/obras/:obraId/rdos', (req, res) => {
+  const erros = validarCampos(
+    req.body,
+    ['data'],
+    ['data', 'atividadeId', 'percentConcluido', 'efetivoPresente', 'ocorrencias']
+  );
+  if (erros.length) return res.status(400).json({ erro: erros.join(' ') });
+  const db = load();
+  const { obraId } = req.params;
+  if (!getObra(db, obraId)) return res.status(404).json({ erro: 'Obra não encontrada' });
+  const item = {
+    id: 'rdo-' + uuid().slice(0, 8),
+    data: req.body.data,
+    atividadeId: req.body.atividadeId || null,
+    atividade: snapshotAtividade(db, obraId, req.body.atividadeId),
+    percentConcluido: req.body.percentConcluido != null ? Number(req.body.percentConcluido) : null,
+    efetivoPresente: req.body.efetivoPresente != null ? Number(req.body.efetivoPresente) : null,
+    ocorrencias: req.body.ocorrencias || '',
+    criadoEm: new Date().toISOString()
+  };
+  if (!db.rdos[obraId]) db.rdos[obraId] = [];
+  db.rdos[obraId].push(item);
+
+  // Atualiza o % concluído real da tarefa vinculada — o cronograma passa a refletir o que
+  // o RDO relatou, não só o que foi planejado (essa é a diferença entre planejamento e realidade).
+  if (item.atividadeId && item.percentConcluido != null) {
+    const cron = db.cronogramas[obraId];
+    if (cron && cron.revisoes.length > 0) {
+      const t = cron.revisoes[cron.revisoes.length - 1].tarefas.find((x) => x.id === item.atividadeId);
+      if (t) t.percentConcluido = item.percentConcluido;
+    }
+  }
+  save(db);
+  res.json(item);
+});
+
+// Compara planejado x real por atividade — desvio de prazo (dias corridos, aproximado pela
+// diferença entre a data do RDO mais recente com <100% e o término planejado da tarefa) e
+// desvio de progresso (percentConcluido real do RDO vs. o que o cronograma linear esperaria
+// até hoje). É o "resultado real da obra" pedido na auditoria — sem isso, RDO é só um diário,
+// não vira dado de gestão.
+app.get('/api/obras/:obraId/rdos/desvios', (req, res) => {
+  const db = load();
+  const { obraId } = req.params;
+  const cron = db.cronogramas[obraId];
+  if (!cron || cron.revisoes.length === 0) return res.json([]);
+  const tarefas = cron.revisoes[cron.revisoes.length - 1].tarefas;
+  const hoje = new Date();
+  const desvios = tarefas.filter((t) => t.inicio && t.termino).map((t) => {
+    const inicio = new Date(t.inicio), termino = new Date(t.termino);
+    const duracaoTotal = Math.max(1, (termino - inicio) / 86400000);
+    const decorrido = Math.max(0, Math.min(duracaoTotal, (hoje - inicio) / 86400000));
+    const percentEsperado = Math.round((decorrido / duracaoTotal) * 100);
+    const percentReal = t.percentConcluido || 0;
+    return {
+      atividadeId: t.id, atividade: t.tarefa, localizacao: t.localizacao || '',
+      percentEsperado, percentReal, desvioPercent: percentReal - percentEsperado,
+      atrasada: hoje > termino && percentReal < 100
+    };
+  }).filter((d) => d.desvioPercent < -5 || d.atrasada) // só o que realmente importa revisar
+    .sort((a, b) => a.desvioPercent - b.desvioPercent);
+  res.json(desvios);
 });
 
 // Janela real de execução de uma especialidade = min(início) a max(término) das tarefas
@@ -594,6 +833,7 @@ app.get('/api/obras/:obraId/mao-de-obra/analise', (req, res) => {
 app.get('/api/programa/mao-de-obra', (req, res) => {
   const db = load();
   const totalPorEspecialidade = {};
+  const janelasPorEspecialidade = {}; // esp -> [{obraId, obraNome, inicio, termino}]
   for (const obra of db.obras) {
     const orcamento = db.orcamentos[obra.id] || [];
     const porEsp = {};
@@ -604,12 +844,93 @@ app.get('/api/programa/mao-de-obra', (req, res) => {
       if (!totalPorEspecialidade[esp]) totalPorEspecialidade[esp] = { total: 0, porObra: {} };
       totalPorEspecialidade[esp].total += necessario;
       totalPorEspecialidade[esp].porObra[obra.nome] = Math.round(necessario * 100) / 100;
+      if (janela) {
+        if (!janelasPorEspecialidade[esp]) janelasPorEspecialidade[esp] = [];
+        janelasPorEspecialidade[esp].push({ obraId: obra.id, obraNome: obra.nome, ...janela, necessario: Math.round(necessario * 100) / 100 });
+      }
     }
   }
   for (const esp of Object.keys(totalPorEspecialidade)) {
     totalPorEspecialidade[esp].total = Math.round(totalPorEspecialidade[esp].total * 100) / 100;
   }
-  res.json(totalPorEspecialidade);
+
+  // Conflito de recursos entre obras (Resource Intelligence — capacidade restaurada da Estrutura
+  // Consolidada do Produto): a mesma especialidade sendo demandada em janelas de tempo que se
+  // sobrepõem em MAIS DE UMA OBRA é, na prática, disputa pelo mesmo time/mercado de mão de obra —
+  // o programa precisa decidir prioridade antes que as obras cheguem lá, não depois.
+  const conflitos = [];
+  for (const esp of Object.keys(janelasPorEspecialidade)) {
+    const janelas = janelasPorEspecialidade[esp];
+    for (let i = 0; i < janelas.length; i++) {
+      for (let j = i + 1; j < janelas.length; j++) {
+        const a = janelas[i], b = janelas[j];
+        if (a.obraId === b.obraId) continue;
+        if (a.inicio > b.termino || b.inicio > a.termino) continue; // não se sobrepõem
+        conflitos.push({
+          especialidade: esp,
+          obraA: a.obraNome, efetivoA: a.necessario, periodoA: `${a.inicio} → ${a.termino}`,
+          obraB: b.obraNome, efetivoB: b.necessario, periodoB: `${b.inicio} → ${b.termino}`,
+          efetivoCombinado: Math.round((a.necessario + b.necessario) * 100) / 100,
+          motivo: `${esp} é demandada em "${a.obraNome}" e "${b.obraNome}" no mesmo período — confirme se o mercado/equipe atual cobre as duas obras simultaneamente.`
+        });
+      }
+    }
+  }
+
+  res.json({ porEspecialidade: totalPorEspecialidade, conflitos });
+});
+
+// ---------- Knowledge & AI (Pilar 7) ----------
+// "Confiabilidade é o produto": a plataforma só aprende alguma coisa se ela conseguir mostrar,
+// entre TODAS as obras, o que se repete — mesmo padrão de conflito em obras diferentes é
+// exatamente o tipo de coisa que devia ter virado regra/checklist antes, não descoberta de novo
+// a cada obra. Isso não é "IA generativa" — é agregação simples e honesta do próprio histórico.
+app.get('/api/conhecimento/recorrencias', (req, res) => {
+  const db = load();
+  const porMotivo = {};
+  let total = 0;
+  const porOrigem = { auto: 0, manual: 0 };
+  const porStatus = {};
+  const porSeveridade = {};
+
+  for (const obra of db.obras) {
+    const incs = db.incompatibilidades[obra.id] || [];
+    for (const i of incs) {
+      total++;
+      porOrigem[i.origem === 'auto' ? 'auto' : 'manual']++;
+      porStatus[i.status] = (porStatus[i.status] || 0) + 1;
+      porSeveridade[i.severidade] = (porSeveridade[i.severidade] || 0) + 1;
+
+      // Só motivos vindos da biblioteca de regras (sequenciamento) têm texto estável entre
+      // obras — motivo digitado à mão varia demais para ser um "padrão" confiável.
+      const motivo = (i.descricao || '').trim();
+      const éDeRegra = REGRAS_SEQUENCIAMENTO.some((r) => motivo === r.motivo);
+      if (!éDeRegra) continue;
+      if (!porMotivo[motivo]) porMotivo[motivo] = { motivo, ocorrencias: 0, obras: new Set(), severidades: {} };
+      porMotivo[motivo].ocorrencias++;
+      porMotivo[motivo].obras.add(obra.nome);
+      porMotivo[motivo].severidades[i.severidade] = (porMotivo[motivo].severidades[i.severidade] || 0) + 1;
+    }
+  }
+
+  const padroesRecorrentes = Object.values(porMotivo)
+    .filter((p) => p.ocorrencias > 1 || p.obras.size > 1) // "recorrente" = mais de uma vez, ou em mais de uma obra
+    .map((p) => ({
+      motivo: p.motivo,
+      ocorrencias: p.ocorrencias,
+      nObras: p.obras.size,
+      obras: Array.from(p.obras),
+      severidadeMaisComum: Object.entries(p.severidades).sort((a, b) => b[1] - a[1])[0][0]
+    }))
+    .sort((a, b) => b.ocorrencias - a.ocorrencias);
+
+  const taxaConfirmacaoAuto = total > 0 ? Math.round((porOrigem.auto / total) * 1000) / 10 : 0;
+  const taxaFechamento = total > 0 ? Math.round(((porStatus.fechado || 0) / total) * 1000) / 10 : 0;
+
+  res.json({
+    resumo: { total, porOrigem, porStatus, porSeveridade, taxaConfirmacaoAuto, taxaFechamento },
+    padroesRecorrentes
+  });
 });
 
 app.listen(PORT, () => {

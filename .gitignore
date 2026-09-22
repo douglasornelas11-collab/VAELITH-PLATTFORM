@@ -1,5 +1,9 @@
-node_modules/
-data/
-uploads/
+node_modules
+data/db.json
+uploads/*
+!uploads/.gitkeep
+!uploads/render
+uploads/render/*
+!uploads/render/.gitkeep
 *.log
-.DS_Store
+.env
