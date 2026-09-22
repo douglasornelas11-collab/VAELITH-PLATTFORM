@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Vaelith Platform — MVP</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 100 100" fill="none">
+      <path d="M10 20 L35 65 L45 20" stroke="#f2f3f5" stroke-width="8" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+      <path d="M50 20 L75 65 L90 20" stroke="#f2f3f5" stroke-width="8" fill="none" stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>
+    VAELITH <span class="platform">PLATFORM</span>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="projetos" class="active">Projetos</button>
+    <button data-tab="cronograma">Cronograma</button>
+    <button data-tab="compat">Compatibilização</button>
+    <button data-tab="maodeobra">Mão de obra</button>
+    <button data-tab="dashboard">Dashboard</button>
+  </nav>
+  <div class="obra-picker">
+    Obra:
+    <select id="obraSelect"></select>
+  </div>
+</div>
+
+<main>
+  <!-- ===================== PROJETOS (Central de projetos e revisões) ===================== -->
+  <section id="view-projetos">
+    <h1>Central de projetos</h1>
+    <div class="subtitle">Cada disciplina guarda seu histórico de revisões — R00, R01, R02... Nunca sobrescreve a anterior. Compare duas revisões e marque o que mudou.</div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Nova disciplina</h2>
+      <div class="form-row">
+        <div style="flex:1">
+          <label>Disciplina</label>
+          <input id="projDiscNome" placeholder="Ex.: Arquitetura, Elétrica, Hidráulica..." />
+        </div>
+        <div style="flex:1">
+          <label>Arquivo inicial (PDF ou imagem) — vira R00</label>
+          <input type="file" id="projDiscArquivo" accept=".pdf,.png,.jpg,.jpeg" />
+        </div>
+        <button class="primary" onclick="criarDisciplinaProjeto()">Criar</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Disciplinas e revisões</h2>
+      <div id="listaDisciplinasProjeto"><div class="empty-state">Nenhuma disciplina cadastrada ainda.</div></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Comparar revisões</h2>
+      <div class="form-row">
+        <div style="flex:1">
+          <label>Disciplina</label>
+          <select id="compDisciplina" onchange="atualizarSeletoresComparacao()"></select>
+        </div>
+        <div style="flex:1">
+          <label>Revisão A</label>
+          <select id="compRevA"></select>
+        </div>
+        <div style="flex:1">
+          <label>Revisão B</label>
+          <select id="compRevB"></select>
+        </div>
+        <button class="primary" onclick="compararRevisoes()">Comparar</button>
+        <button class="ghost" onclick="detectarMudancasAutomaticas()">Detectar mudanças automaticamente</button>
+      </div>
+      <div class="subtitle" style="margin-top:6px">Em imagens (PNG/JPG), clique sobre o desenho para marcar exatamente onde algo mudou. Em PDF, use o formulário de marcação abaixo do visualizador (o navegador não permite capturar clique dentro do PDF embutido). "Detectar mudanças automaticamente" funciona para PDF e imagem — compara as duas revisões e sugere regiões alteradas; nada vira registro até você confirmar cada sugestão.</div>
+      <div id="areaComparacao" style="margin-top:16px"></div>
+      <div id="areaDeteccaoAutomatica" style="margin-top:16px"></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">O que mudou (elementos marcados)</h2>
+      <div id="listaElementos"><div class="empty-state">Compare duas revisões e marque uma alteração para ver aqui.</div></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Overlay multidisciplinar</h2>
+      <div class="subtitle" style="margin-top:-6px">Sobreponha a revisão de uma disciplina com a de outra (ex.: Elétrica × Hidráulica) para ver visualmente onde os dois desenhos ocupam a mesma região — um candidato a interferência física, não uma conclusão automática.</div>
+      <div class="form-row">
+        <div style="flex:1"><label>Disciplina A</label><select id="ovDisciplinaA" onchange="atualizarSeletorRevisaoOverlay('A')"></select></div>
+        <div style="flex:1"><label>Revisão A</label><select id="ovRevisaoA"></select></div>
+        <div style="flex:1"><label>Disciplina B</label><select id="ovDisciplinaB" onchange="atualizarSeletorRevisaoOverlay('B')"></select></div>
+        <div style="flex:1"><label>Revisão B</label><select id="ovRevisaoB"></select></div>
+      </div>
+      <div class="form-row" style="align-items:center">
+        <button class="primary" onclick="verOverlay()">Ver overlay</button>
+        <button class="ghost" onclick="detectarSobreposicoes()">Detectar sobreposições</button>
+        <div style="flex:1"><label>Opacidade da disciplina B</label><input type="range" id="ovOpacidade" min="0" max="100" value="55" oninput="ajustarOpacidadeOverlay()" /></div>
+        <label style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap"><input type="checkbox" id="ovMostrarA" checked onchange="ajustarOpacidadeOverlay()" style="width:auto" /> mostrar A</label>
+        <label style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap"><input type="checkbox" id="ovMostrarB" checked onchange="ajustarOpacidadeOverlay()" style="width:auto" /> mostrar B</label>
+      </div>
+      <div id="areaOverlay" style="margin-top:16px"></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Coordination Report</h2>
+      <div class="subtitle" style="margin-top:-6px">Resumo desta obra: disciplinas analisadas, incompatibilidades por severidade e tipo, e quanto veio de detecção automática confirmada versus registro manual.</div>
+      <div class="form-row"><button class="primary" onclick="gerarRelatorioCoordenacao()">Gerar relatório</button><a id="linkRelatorioPdf" class="pill" style="display:none" target="_blank">Baixar PDF</a></div>
+      <div id="areaRelatorio" style="margin-top:16px"></div>
+    </div>
+  </section>
+
+  <!-- ===================== CRONOGRAMA ===================== -->
+  <section id="view-cronograma" style="display:none">
+    <h1>Cronograma e replanejamento</h1>
+    <div class="subtitle">Importe o cronograma da obra (MS Project XML, Excel ou CSV) e replaneje mantendo o histórico de revisões.</div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Importar cronograma</h2>
+      <div class="form-row">
+        <div style="flex:1">
+          <label>Arquivo (.xml do MS Project, .xlsx ou .csv)</label>
+          <input type="file" id="fileCronograma" accept=".xml,.xlsx,.xls,.csv" />
+        </div>
+        <button class="primary" onclick="importarCronograma()">Importar</button>
+      </div>
+      <div id="importMsg" class="subtitle" style="margin:8px 0 0"></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Linha do tempo (planejado x atual)</h2>
+      <div id="gantt"><div class="empty-state">Nenhum cronograma importado ainda para esta obra.</div></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Tarefas — revisão atual</h2>
+      <div id="tabelaTarefas"><div class="empty-state">—</div></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Histórico de revisões</h2>
+      <div id="revisoes"><div class="empty-state">—</div></div>
+    </div>
+  </section>
+
+  <!-- ===================== COMPATIBILIZAÇÃO ===================== -->
+  <section id="view-compat" style="display:none">
+    <h1>Compatibilização de projetos</h1>
+    <div class="subtitle">Documentos por disciplina, checklist guiado de pontos críticos e registro rastreável de incompatibilidades.</div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h2 style="margin-top:0">Disciplinas / arquivos de projeto</h2>
+        <div class="subtitle" style="margin-top:-4px">Cadastro, versionamento (R00, R01...) e comparação de revisões agora vivem na aba <strong>Projetos</strong>.</div>
+        <div id="listaDisciplinas" style="margin-top:16px"></div>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">Checklist guiado de pontos críticos</h2>
+        <div id="checklistPadrao"></div>
+        <div class="subtitle" style="margin-top:10px">Marque um item como conflito para abrir um registro de incompatibilidade já preenchido.</div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Nova incompatibilidade</h2>
+      <div class="grid-2">
+        <div>
+          <label>Título</label>
+          <input id="incTitulo" placeholder="Ex.: Ar-condicionado x infraestrutura elétrica" />
+          <label>Descrição</label>
+          <textarea id="incDescricao" rows="3"></textarea>
+          <label>Tipo</label>
+          <select id="incTipo">
+            <option value="documentos">Compatibilização entre documentos de projeto</option>
+            <option value="fisica">Compatibilização física entre ofícios (sequenciamento)</option>
+          </select>
+        </div>
+        <div>
+          <label>Severidade</label>
+          <select id="incSeveridade">
+            <option>baixa</option>
+            <option selected>média</option>
+            <option>alta</option>
+          </select>
+          <label>Responsável</label>
+          <input id="incResponsavel" placeholder="Nome do responsável" />
+          <label>Prazo</label>
+          <input id="incPrazo" type="date" />
+        </div>
+      </div>
+      <div style="margin-top:14px"><button class="primary" onclick="criarIncompatibilidade()">Registrar</button></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Incompatibilidades registradas</h2>
+      <div id="listaIncompatibilidades"><div class="empty-state">Nenhuma incompatibilidade registrada ainda.</div></div>
+    </div>
+  </section>
+
+  <!-- ===================== MÃO DE OBRA ===================== -->
+  <section id="view-maodeobra" style="display:none">
+    <h1>Mão de obra — dimensionamento bottom-up</h1>
+    <div class="subtitle">Escopo × produtividade (TCPO/SINAPI) ÷ janela real de execução do cronograma = efetivo médio necessário. Compare ao efetivo realmente mobilizado.</div>
+
+    <div class="grid-2">
+      <div class="panel">
+        <h2 style="margin-top:0">Biblioteca de produtividade</h2>
+        <div id="listaBiblioteca"></div>
+        <details style="margin-top:12px">
+          <summary style="cursor:pointer;color:var(--text-muted);font-size:13px">Adicionar índice próprio</summary>
+          <div class="grid-2" style="margin-top:8px">
+            <div>
+              <label>Especialidade</label>
+              <input id="bibEspecialidade" placeholder="Ex.: eletricista" />
+              <label>Serviço</label>
+              <input id="bibServico" placeholder="Ex.: Instalação de pontos elétricos" />
+            </div>
+            <div>
+              <label>Unidade</label>
+              <input id="bibUnidade" placeholder="m², un, ml..." />
+              <label>Índice (Hh por unidade)</label>
+              <input id="bibIndice" type="number" step="0.01" />
+            </div>
+          </div>
+          <div style="margin-top:10px"><button class="ghost" onclick="adicionarIndice()">Adicionar à biblioteca</button></div>
+        </details>
+      </div>
+
+      <div class="panel">
+        <h2 style="margin-top:0">Lançar item de orçamento (BOQ)</h2>
+        <label>Especialidade</label>
+        <input id="orcEspecialidade" placeholder="Ex.: pedreiro" />
+        <label>Serviço</label>
+        <input id="orcServico" placeholder="Ex.: Revestimento cerâmico" />
+        <div class="form-row">
+          <div style="flex:1"><label>Unidade</label><input id="orcUnidade" placeholder="m², un..." /></div>
+          <div style="flex:1"><label>Quantidade</label><input id="orcQuantidade" type="number" step="0.01" /></div>
+        </div>
+        <label>Índice manual (Hh/unidade) — opcional, sobrepõe a biblioteca</label>
+        <input id="orcIndiceManual" type="number" step="0.01" />
+        <div style="margin-top:12px"><button class="primary" onclick="lancarOrcamento()">Calcular e lançar</button></div>
+        <div id="orcMsg" class="subtitle" style="margin:8px 0 0"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Itens de orçamento lançados</h2>
+      <div id="listaOrcamento"><div class="empty-state">Nenhum item lançado ainda.</div></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Registrar efetivo mobilizado (diário de obra simplificado)</h2>
+      <div class="form-row">
+        <div style="flex:1"><label>Especialidade</label><input id="efEspecialidade" placeholder="Ex.: pedreiro" /></div>
+        <div style="flex:1"><label>Data</label><input id="efData" type="date" /></div>
+        <div style="flex:1"><label>Nº de profissionais no dia</label><input id="efQuantidade" type="number" /></div>
+        <button class="primary" onclick="registrarEfetivo()">Registrar</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Efetivo necessário x mobilizado, por especialidade</h2>
+      <div id="analiseMaoDeObra"><div class="empty-state">Lance itens de orçamento para ver o cálculo.</div></div>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0">Visão de programa — demanda somada entre todas as obras</h2>
+      <div class="subtitle" style="margin-top:-6px">A recomendação central do seu estudo: dimensionar pelo programa inteiro, não obra a obra isoladamente.</div>
+      <div id="visaoPrograma"><div class="empty-state">—</div></div>
+    </div>
+  </section>
+
+  <!-- ===================== DASHBOARD ===================== -->
+  <section id="view-dashboard" style="display:none">
+    <h1>Dashboard visual de desvios</h1>
+    <div class="subtitle">Onde a obra está desviando do planejado, e onde a compatibilização está concentrando esforço.</div>
+
+    <div class="grid-3" id="kpis"></div>
+
+    <div class="grid-2" style="margin-top:20px">
+      <div class="panel">
+        <h2 style="margin-top:0">Incompatibilidades por status</h2>
+        <div id="chartStatus"></div>
+      </div>
+      <div class="panel">
+        <h2 style="margin-top:0">Incompatibilidades por tipo</h2>
+        <div id="chartTipo"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
