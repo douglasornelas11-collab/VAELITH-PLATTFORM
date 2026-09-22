@@ -43,7 +43,10 @@ function parseDurationToDays(pt) {
 }
 
 function parseSpreadsheet(buffer, filename) {
-  const wb = xlsx.read(buffer, { type: 'buffer', cellDates: true });
+  // codepage 65001 = UTF-8 — sem isso, .csv com acentos (Instalação, Compatibilização...)
+  // vem corrompido do parser (a biblioteca assume Latin-1 por padrão para CSV puro).
+  // .xlsx não é afetado (a codificação já vem declarada dentro do próprio arquivo).
+  const wb = xlsx.read(buffer, { type: 'buffer', cellDates: true, codepage: 65001 });
   const sheet = wb.Sheets[wb.SheetNames[0]];
   const rows = xlsx.utils.sheet_to_json(sheet, { defval: '' });
   const norm = (obj, keys) => {

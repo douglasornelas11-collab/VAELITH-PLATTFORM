@@ -41,7 +41,14 @@ function defaultData() {
       { id: 'ip-8', especialidade: 'marceneiro', servico: 'Marcenaria/mobiliário', unidade: 'un', indiceHhPorUnidade: 2.0, fonte: 'Estimativa geral' }
     ],
     orcamentos: {},     // obraId -> [ {id, especialidade, servico, unidade, quantidade, indiceUsado, horasHomem} ]
-    efetivoDiario: {}   // obraId -> [ {id, especialidade, data, quantidade} ]
+    efetivoDiario: {},  // obraId -> [ {id, especialidade, data, quantidade} ]
+    // Cost & Procurement Intelligence (Pilar 5) — pedido de compra ligado a uma disciplina/
+    // especialidade; "em risco" é calculado dinamicamente contra incompatibilidades abertas
+    // (compras afetadas por mudança — capacidade restaurada da Estrutura Consolidada).
+    pedidosCompra: {},  // obraId -> [ {id, item, disciplina, especialidade, valorEstimado, fornecedor, status, criadoEm} ]
+    // Construction Intelligence (Pilar 6) — RDO simplificado: um registro por dia, ligado a
+    // uma atividade do cronograma, atualiza o % concluído real dessa atividade.
+    rdos: {}            // obraId -> [ {id, data, atividadeId, atividade, percentConcluido, efetivoPresente, ocorrencias, criadoEm} ]
   };
 }
 

@@ -1,6 +1,6 @@
 # Vaelith Platform — protótipo MVP
 
-Protótipo funcional da Fase 1 do PRD (compatibilização de projetos, planejamento/replanejamento de cronograma e dashboard de desvios). Não é produção — é a base para validar o fluxo antes de investir em infraestrutura definitiva (ver seção "Arquitetura técnica" do PRD para a versão com PostgreSQL, etc.).
+Protótipo funcional dos 7 pilares da Estrutura Consolidada do Produto (Preconstruction & Coordination, Planning, Resource, Cost & Procurement, Construction e Knowledge & AI Intelligence). Não é produção — é a base para validar o fluxo antes de investir em infraestrutura definitiva (banco de dados real, autenticação, BIM/IFC 3D — ver README, seção "O que ainda não está aqui").
 
 ## Como rodar
 
@@ -38,6 +38,12 @@ Os dados ficam salvos em `data/db.json` (arquivo local — reinicia do zero se v
 - Checklist guiado com os pontos críticos clássicos (shafts, furos, cruzamento de dutos, compatibilização física entre ofícios). O cadastro, versionamento e comparação de disciplinas agora vivem na aba Projetos.
 - Registro de incompatibilidade com fluxo de status: aberto → em análise → revisão de projeto → aprovado → fechado.
 - Distingue os dois tipos do seu estudo de caso: compatibilização entre documentos de projeto e compatibilização física entre ofícios concorrentes (sequenciamento).
+- **Incompatibilidade vinculada a uma atividade do cronograma:** ao registrar (manual ou a partir de uma sugestão automática), é possível apontar qual atividade do cronograma está envolvida. A lista de incompatibilidades mostra a atividade vinculada, o local dela e um selo de prazo — "começa em Nd" (amarelo se for em até 7 dias) ou "atrasada" (vermelho) — para priorizar o que precisa de decisão antes que a obra chegue naquele ponto.
+
+**Planning Intelligence (Pilar 3 — cronograma como fonte de coordenação, não só de datas)**
+- **Local por atividade:** cada tarefa do cronograma ganhou um campo "Local" (ex.: "Pav 2 - Sala 203") — é a base para cruzar atividades por onde elas realmente acontecem, não só por quando.
+- **Sequenciamento espacial (Spatial & Sequence Coordination — capacidade restaurada da Estrutura Consolidada do Produto):** compatibilizar os *projetos* não basta — duas *atividades* de obra incompatíveis programadas no mesmo local e no mesmo período também geram retrabalho (pintura e instalação de vidro na mesma sala, forro fechado antes da inspeção das instalações, piso acabado com demolição concorrente...). O painel "Sequenciamento espacial" (aba Cronograma) cruza automaticamente pares de atividades que compartilham local e têm datas sobrepostas, usando uma biblioteca de regras determinísticas (pares de palavras-chave — a mesma filosofia de IA do resto do produto: sinal heurístico, nunca decisão automática) para estimar severidade e explicar o motivo. Qualquer par no mesmo local/período aparece mesmo sem regra específica, com severidade "média", para revisão manual.
+- **"Registrar" gera a Incompatibilidade automaticamente:** cada conflito detectado tem um botão que cria a Incompatibilidade já preenchida (tipo físico/sequenciamento, severidade, motivo, origem `auto`) e vinculada às atividades envolvidas — mesma lógica de confirmação humana das outras detecções automáticas da plataforma.
 
 **Mão de obra (Fase 2 — TCPO/PMBOK, dimensionamento bottom-up)**
 - Biblioteca de produtividade (índices Hh/unidade), pré-carregada com valores citados no seu artigo e editável.
@@ -45,21 +51,36 @@ Os dados ficam salvos em `data/db.json` (arquivo local — reinicia do zero se v
 - Cálculo do efetivo médio necessário = horas-homem ÷ janela real de execução (não a duração total da obra) — a janela é lida das tarefas do cronograma cujo campo "recurso" cita a especialidade.
 - Registro simples de efetivo mobilizado por dia, comparado ao necessário (gap positivo/negativo).
 - Visão de programa: soma a demanda de cada especialidade entre todas as obras cadastradas — a recomendação central do seu estudo (dimensionar pelo programa, não obra a obra isolada).
+- **Conflito de recursos entre obras (Resource Intelligence — capacidade restaurada da Estrutura Consolidada do Produto):** quando a mesma especialidade é demandada por janelas de tempo que se sobrepõem em obras diferentes (ex.: pedreiro em duas obras ao mesmo tempo), a Visão de programa aponta o conflito automaticamente — período de cada obra, efetivo de cada uma e efetivo combinado — para decidir prioridade entre as obras antes que a disputa pelo mesmo time vire atraso.
+
+**Compras (Cost & Procurement Intelligence — Pilar 5)**
+- Pedido de compra com item/serviço, disciplina, especialidade, valor estimado, fornecedor e status (planejado → emitido → recebido).
+- **Compras afetadas por mudança (capacidade restaurada da Estrutura Consolidada do Produto):** todo pedido ainda não recebido é checado contra as incompatibilidades abertas da obra — se a disciplina/especialidade do pedido bate com alguma incompatibilidade aberta, ele aparece marcado "em risco" com o motivo (qual incompatibilidade e por quê). Fechar a incompatibilidade tira o pedido do risco automaticamente. O risco é sempre calculado na leitura, nunca gravado como decisão automática — mesma regra de confirmação humana do resto da plataforma, aqui aplicada como alerta, não como bloqueio.
+
+**Construção (Construction Intelligence — Pilar 6)**
+- **RDO simplificado:** um registro por dia, com atividade vinculada do cronograma, % concluído real, efetivo presente e ocorrências (chuva, falta de material, retrabalho...). Diferente das detecções automáticas, o RDO é o dado primário — ele grava direto e atualiza o % concluído real da tarefa vinculada no cronograma.
+- **Planejado x real:** compara, para cada atividade com datas definidas, o % que o cronograma linear esperaria até hoje contra o % real relatado nos RDOs, e sinaliza atividades atrasadas (prazo vencido e ainda não concluídas) ou com desvio relevante — é o "resultado real da obra" que faltava para o cronograma deixar de ser só planejamento.
 
 **Dashboard**
 - Dias de desvio acumulado, incompatibilidades abertas/fechadas.
 - Distribuição por status e por tipo.
+- **Base de conhecimento (Knowledge & AI — Pilar 7):** agregado de TODAS as obras cadastradas — cruza os motivos de incompatibilidade que vieram da biblioteca de regras de sequenciamento (texto estável entre obras, diferente de descrição digitada à mão) e aponta quais padrões se repetiram mais de uma vez ou em mais de uma obra, com a severidade mais comum. Também mostra a taxa de confirmação automática (quanto do histórico veio de detecção confirmada vs. registro manual) e a taxa de fechamento — os dois indicadores de "confiabilidade é o produto" da Estrutura Consolidada.
 
 ## O que ainda não está aqui (próximos passos do roadmap)
 
-- Localização estruturada (Obra → Pavimento → Ambiente → Elemento) — hoje overlay e detecção comparam disciplinas inteiras, não uma área específica.
-- Scope/Cost Intelligence, Bid Readiness, Ready to Build, Risk Engine, Decision Engine — pilares 1 (parte) e 3–7 da Estrutura Consolidada, fora do V1.
-- Diário de obra estruturado e fornecedores — Construction Intelligence.
+Os 7 pilares da Estrutura Consolidada do Produto agora têm uma primeira versão real e testada no protótipo (Preconstruction/Coordination, Planning, Resource, Cost & Procurement, Construction, Knowledge & AI). O que falta é profundidade dentro de cada um, e a infraestrutura de produção:
+
+- Localização estruturada (Obra → Pavimento → Ambiente → Elemento) — hoje overlay/detecção comparam disciplinas inteiras ou usam um campo de texto livre ("Local"), não uma hierarquia real navegável.
+- Bid Readiness, Ready to Build, Risk Engine, Decision Engine como telas dedicadas — hoje os sinais que os alimentariam (incompatibilidades, desvios, riscos de compra) já existem espalhados pelas abas, mas não consolidados numa "tela de decisão" única.
+- Fornecedores como entidade própria (hoje "fornecedor" é só um campo de texto no pedido de compra) e RDO com anexo de fotos.
 - Clash detection real em BIM/IFC (hoje só 2D) — Coordination Engine 3D.
 - Banco de dados real (Postgres), autenticação, múltiplos usuários — hoje é single-user, arquivo local.
 - DWG/DXF como entrada — hoje só PDF e imagem.
+- Biblioteca de regras de sequenciamento e a Base de conhecimento ainda são pequenas e determinísticas (poucas regras, comparação exata de texto) — crescer isso com mais obras reais é o que prova (ou derruba) a promessa de "aprender com o histórico".
 
-## Notas de calibração da detecção automática
+## Notas de calibração
+
+- **Importação de cronograma (.csv):** corrigido um bug real encontrado durante o teste do Planning Intelligence — nomes de tarefa com acento (ex.: "Instalação") vinham corrompidos ("InstalaÃ§Ã£o") porque o parser assumia Latin-1 por padrão para CSV puro. Corrigido forçando UTF-8 na leitura. `.xlsx` nunca foi afetado (a codificação já vem declarada dentro do próprio arquivo).
 
 - **Diff entre revisões** (`diffEngine.py`): testado com 2 PDFs reais (AutoCAD, mesma prancha, R02→R03). Como vêm do mesmo arquivo CAD, já nascem pixel-alinhados — o alinhamento fino (ECC) é o plano B para PDFs escaneados ou plotados de forma diferente. 8 regiões candidatas encontradas; 3/4 conferidas manualmente eram mudanças reais, 1 falso positivo de antialiasing de texto.
 - **Sobreposição entre disciplinas** (`overlapEngine.py`): a moldura da prancha (borda do template) é descartada antes do cálculo — sem isso, qualquer par de disciplinas do mesmo template "sobrepõe" a página inteira, o que não é um candidato útil. Também descarta regiões maiores que 50% da página pelo mesmo motivo. Validado com desenhos sintéticos de conteúdo realmente diferente (traços horizontais x verticais cruzando parcialmente): a região de cruzamento real foi localizada com precisão.
